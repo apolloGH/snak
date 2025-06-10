@@ -872,14 +872,40 @@ function calculateMove(board, you) {
         const nextHead = getNextHead(move);
         return isSafe(move, nextHead);
     });
-    const move = fallbackMoves.length > 0
-        ? fallbackMoves[Math.floor(Math.random() * fallbackMoves.length)]
-        : "down";
-    logGameState(
-        "Fallback",
-        move,
-    );
-    return move;
+    let bestMove = null;
+    let bestSpace = -Infinity;
+    for (const move of availableMoves) {
+        const nextHead = getNextHead(move);
+        if (!isSafe(move, nextHead) || isImmediateSelfCollision(move)) continue;
+        if (
+            board.hazards &&
+            board.hazards.some((h) => h.x === nextHead.x && h.y === nextHead.y) &&
+            you.health <= 15
+        ) {
+            continue;
+        }
+        const blocked = new Set();
+        for (const snake of board.snakes) {
+            for (const segment of snake.body) {
+                blocked.add(`${segment.x},${segment.y}`);
+            }
+        }
+        if (myBody.length > 1 && !food.some(f => f.x === nextHead.x && f.y === nextHead.y)) {
+            const myTail = myBody[myBody.length - 1];
+            blocked.delete(`${myTail.x},${myTail.y}`);
+        }
+        const availableSpace = floodFill(nextHead, blocked, board, [nextHead, ...myBody]);
+        if (availableSpace > bestSpace) {
+            bestSpace = availableSpace;
+            bestMove = move;
+        }
+    }
+    if (bestMove) {
+        logGameState("Fallback-Safest", bestMove, { availableSpace: bestSpace });
+        return bestMove;
+    }
+    logGameState("Fallback-Any", availableMoves[0], {});
+    return availableMoves[0];
 }
 
 /* function visualizeBoard(board, you, path = []) {
@@ -1268,6 +1294,14 @@ function isSafeMinimax(move, nextHead, board, you, myBody) {
         nextHead.y >= board.height
     ) {
         return false;
+    }
+    if (
+        board.hazards &&
+        board.hazards.some((h) => h.x === nextHead.x && h.y === nextHead.y)
+    ) {
+        if (you.health <= 15) {
+            return false;
+        }
     }
     const willEatFood = board.food &&
         board.food.some((f) => f.x === nextHead.x && f.y === nextHead.y);
