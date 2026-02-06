@@ -1,5 +1,4 @@
 Deno.serve({
-    port: 8080,
 }, async (req) => {
     const url = new URL(req.url);
     if (req.method === "GET" && url.pathname === "/") {
@@ -31,12 +30,12 @@ Deno.serve({
 const handlers = {
     info() {
         const colors = [
-            "#888888",
+            "#ff274f",
             "#FF5733",
-            "#33FF57",
-            "#3357FF",
-            "#FFD700",
-            "#00CED1",
+            "#f133ff",
+            "#b833ff",
+            "#6a00ff",
+            "#1c00d1",
         ];
         const heads = [
             "default",
@@ -125,7 +124,7 @@ function calculateInterceptionMove(myHead, targetHead, board, you) {
 
         const interceptCount = possibleHeadMoves.filter((targetPos) =>
             Math.abs(nextHead.x - targetPos.x) +
-                    Math.abs(nextHead.y - targetPos.y) <= 1
+            Math.abs(nextHead.y - targetPos.y) <= 1
         ).length;
 
         return { move, nextHead, interceptCount };
@@ -1248,7 +1247,7 @@ function minimaxEval(board, you, myHead, myBody) {
         if (snake.id === you.id) continue;
         const dist = Math.abs(myHead.x - snake.head.x) +
             Math.abs(myHead.y - snake.head.y);
-if (dist < minDistToEnemy) minDistToEnemy = dist;
+        if (dist < minDistToEnemy) minDistToEnemy = dist;
     }
 
     const minDim = Math.min(board.width, board.height);
@@ -1394,7 +1393,7 @@ function canTrapSnake(snake, myHead, board, you) {
             };
             if (
                 Math.abs(myNext.x - head.x) + Math.abs(myNext.y - head.y) ===
-                    1 &&
+                1 &&
                 myNext.x >= 0 && myNext.x < board.width &&
                 myNext.y >= 0 && myNext.y < board.height &&
                 !board.snakes.some((s) =>
@@ -1446,7 +1445,7 @@ function canTrapSnake(snake, myHead, board, you) {
             };
             if (
                 Math.abs(myNext.x - head.x) + Math.abs(myNext.y - head.y) ===
-                    1 &&
+                1 &&
                 myNext.x >= 0 && myNext.x < board.width &&
                 myNext.y >= 0 && myNext.y < board.height &&
                 !board.snakes.some((s) =>
