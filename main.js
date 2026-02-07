@@ -756,6 +756,23 @@ function calculateMove(board, you) {
             availableMoves = availableMoves.filter((m) => m !== "right");
         }
     }
+    // Action masking: remove moves that will immediately kill us
+    // unless every move would result in death in one move.
+    (function actionMaskImmediateDeath() {
+        const immediateDeath = availableMoves.filter((move) => {
+            const nextHead = getNextHead(move);
+            try {
+                return (!isSafe(move, nextHead) || isImmediateSelfCollision(move));
+            } catch (e) {
+                return true;
+            }
+        });
+        if (immediateDeath.length > 0 && immediateDeath.length < availableMoves.length) {
+            const masked = new Set(immediateDeath);
+            availableMoves = availableMoves.filter((m) => !masked.has(m));
+            logGameState("ActionMask", null, { masked: immediateDeath.join(",") });
+        }
+    })();
     const safeMoves = availableMoves.filter((move) => {
         const nextHead = getNextHead(move);
         return isSafe(move, nextHead) && !isImmediateSelfCollision(move) &&
