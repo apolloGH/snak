@@ -130,9 +130,33 @@ function calculateInterceptionMove(myHead, targetHead, board, you) {
         return { move, nextHead, interceptCount };
     }).filter((m) => m.interceptCount > 0);
 
-    return interceptMoves.sort((a, b) =>
-        b.interceptCount - a.interceptCount
-    )[0];
+    // Filter out intercept moves that are clearly inescapable (e.g. one-width
+    // tunnels) or move directly into an equal-or-larger snake head.
+    const safeIntercepts = interceptMoves.filter((m) => {
+        try {
+            // avoid moving into another snake's head if they are >= our length
+            for (const snake of board.snakes) {
+                if (snake.id === you.id) continue;
+                if (snake.head.x === m.nextHead.x && snake.head.y === m.nextHead.y && snake.length >= you.length) {
+                    return false;
+                }
+            }
+
+            const trapAnalysis = detectTrapAhead(board, you, m.move);
+            if (trapAnalysis && trapAnalysis.isTrap) {
+                // treat no escape routes or not enough available space as inescapable
+                if (trapAnalysis.escapeRoutes.length === 0 || trapAnalysis.availableSpace <= you.length) {
+                    return false;
+                }
+            }
+        } catch (e) {
+            return false;
+        }
+        return true;
+    });
+
+    const finalList = safeIntercepts.length > 0 ? safeIntercepts : interceptMoves;
+    return finalList.sort((a, b) => b.interceptCount - a.interceptCount)[0];
 }
 
 function calculateMove(board, you) {
@@ -756,6 +780,26 @@ function calculateMove(board, you) {
             availableMoves = availableMoves.filter((m) => m !== "right");
         }
     }
+    // Very early: if an equal-or-larger snake head is adjacent, prefer moving away immediately.
+    for (const snake of board.snakes) {
+        if (snake.id === you.id) continue;
+        if (snake.length >= you.length) {
+            const d = Math.abs(myHead.x - snake.head.x) + Math.abs(myHead.y - snake.head.y);
+            if (d === 1) {
+                let preferred = null;
+                if (snake.head.x < myHead.x) preferred = "right"; // threat is left
+                else if (snake.head.x > myHead.x) preferred = "left"; // threat is right
+                else if (snake.head.y < myHead.y) preferred = "up"; // threat is down
+                else if (snake.head.y > myHead.y) preferred = "down"; // threat is up
+
+                if (preferred && availableMoves.includes(preferred)) {
+                    const nextHead = getNextHead(preferred);
+                    logGameState("Escape-AdjThreat-VeryEarly-Force", preferred, { from: `(${myHead.x},${myHead.y})`, to: `(${nextHead.x},${nextHead.y})`, threat: `(${snake.head.x},${snake.head.y})` });
+                    return preferred;
+                }
+            }
+        }
+    }
     // Action masking: remove moves that will immediately kill us
     // unless every move would result in death in one move.
     (function actionMaskImmediateDeath() {
@@ -773,11 +817,111 @@ function calculateMove(board, you) {
             logGameState("ActionMask", null, { masked: immediateDeath.join(",") });
         }
     })();
+    // Immediate-adjacent threat escape (early): if an equal-or-larger snake head is adjacent,
+    // prefer moving directly away from it when safe. Placed early to avoid later masking.
+    for (const snake of board.snakes) {
+        if (snake.id === you.id) continue;
+        if (snake.length >= you.length) {
+            const d = Math.abs(myHead.x - snake.head.x) + Math.abs(myHead.y - snake.head.y);
+            if (d === 1) {
+                let preferred = null;
+                if (snake.head.x < myHead.x) preferred = "right"; // threat is left
+                else if (snake.head.x > myHead.x) preferred = "left"; // threat is right
+                else if (snake.head.y < myHead.y) preferred = "up"; // threat is down
+                else if (snake.head.y > myHead.y) preferred = "down"; // threat is up
+
+                if (preferred && availableMoves.includes(preferred)) {
+                    const nextHead = getNextHead(preferred);
+                    const safeB = isSafe(preferred, nextHead);
+                    const imm = isImmediateSelfCollision(preferred);
+                    const nxt = isNextTurnSelfCollision(preferred);
+                    logGameState("Escape-AdjThreat-Check", preferred, { safe: safeB, immediateSelf: imm, nextTurnSelf: nxt, availableMoves: availableMoves.join(",") });
+                    if (safeB && !imm && !nxt) {
+                        logGameState("Escape-AdjThreat-Early", preferred, { from: `(${myHead.x},${myHead.y})`, to: `(${nextHead.x},${nextHead.y})`, threat: `(${snake.head.x},${snake.head.y})` });
+                        return preferred;
+                    }
+                }
+            }
+        }
+    }
+    // Always evaluate all remaining moves for inescapable traps (one-width tunnels etc.)
+    (function actionMaskInescapableTraps() {
+        const trapMoves = [];
+        // compute current minimum distance to equal-or-larger snakes
+        let currentMinD = Infinity;
+        for (const s of board.snakes) {
+            if (s.id === you.id) continue;
+            if (s.length >= you.length) {
+                const d = Math.abs(myHead.x - s.head.x) + Math.abs(myHead.y - s.head.y);
+                if (d < currentMinD) currentMinD = d;
+            }
+        }
+        if (currentMinD === Infinity) currentMinD = Infinity;
+
+        for (const move of availableMoves) {
+            const nextHead = getNextHead(move);
+            try {
+                const trapAnalysis = detectTrapAhead(board, you, move);
+                // If marked as trap and no escape routes, or the available space is less
+                // than our length (likely a one-width tunnel), consider it inescapable.
+                if (
+                    trapAnalysis.isTrap &&
+                    (trapAnalysis.escapeRoutes.length === 0 || trapAnalysis.availableSpace <= you.length)
+                ) {
+                    // but allow it if this move increases distance from the nearest threat
+                    let newMinD = Infinity;
+                    for (const s of board.snakes) {
+                        if (s.id === you.id) continue;
+                        if (s.length >= you.length) {
+                            const d = Math.abs(nextHead.x - s.head.x) + Math.abs(nextHead.y - s.head.y);
+                            if (d < newMinD) newMinD = d;
+                        }
+                    }
+                    if (!(newMinD > currentMinD)) {
+                        trapMoves.push(move);
+                    }
+                }
+            } catch (e) {
+                // conservative: treat errors as traps
+                trapMoves.push(move);
+            }
+        }
+        // Only apply masking if it doesn't remove every move (avoid empty move list)
+        if (trapMoves.length > 0 && trapMoves.length < availableMoves.length) {
+            const masked = new Set(trapMoves);
+            availableMoves = availableMoves.filter((m) => !masked.has(m));
+            logGameState("TrapMask", null, { masked: trapMoves.join(",") });
+        }
+    })();
     const safeMoves = availableMoves.filter((move) => {
         const nextHead = getNextHead(move);
         return isSafe(move, nextHead) && !isImmediateSelfCollision(move) &&
             !isNextTurnSelfCollision(move);
     });
+
+    // Immediate-adjacent threat escape: if an equal-or-larger snake head is adjacent,
+    // prefer moving directly away from it when safe.
+    for (const snake of board.snakes) {
+        if (snake.id === you.id) continue;
+        if (snake.length >= you.length) {
+            const d = Math.abs(myHead.x - snake.head.x) + Math.abs(myHead.y - snake.head.y);
+            if (d === 1) {
+                let preferred = null;
+                if (snake.head.x < myHead.x) preferred = "right"; // threat is left
+                else if (snake.head.x > myHead.x) preferred = "left"; // threat is right
+                else if (snake.head.y < myHead.y) preferred = "up"; // threat is down
+                else if (snake.head.y > myHead.y) preferred = "down"; // threat is up
+
+                if (preferred && availableMoves.includes(preferred)) {
+                    const nextHead = getNextHead(preferred);
+                    if (isSafe(preferred, nextHead) && !isImmediateSelfCollision(preferred) && !isNextTurnSelfCollision(preferred)) {
+                        logGameState("Escape-AdjThreat", preferred, { from: `(${myHead.x},${myHead.y})`, to: `(${nextHead.x},${nextHead.y})`, threat: `(${snake.head.x},${snake.head.y})` });
+                        return preferred;
+                    }
+                }
+            }
+        }
+    }
 
     const analyzedMoves = safeMoves.map((move) => {
         const trapAnalysis = detectTrapAhead(board, you, move);
@@ -790,12 +934,50 @@ function calculateMove(board, you) {
 
     const safestMoves = analyzedMoves.filter((m) => !m.isTrap);
     if (safestMoves.length > 0) {
-        const chosenMove =
-            safestMoves[Math.floor(Math.random() * safestMoves.length)];
+        // Prefer moves that increase distance from equal-or-larger enemy heads
+        // Combine threat distance and directional bias away from nearby larger/equal snakes.
+        function threatScore(nextHead) {
+            let minD = Infinity;
+            // directional bias vector (sum of threat->me vectors)
+            let vx = 0;
+            let vy = 0;
+            for (const snake of board.snakes) {
+                if (snake.id === you.id) continue;
+                if (snake.length >= you.length) {
+                    const dx = myHead.x - snake.head.x;
+                    const dy = myHead.y - snake.head.y;
+                    vx += dx;
+                    vy += dy;
+                    const d = Math.abs(nextHead.x - snake.head.x) + Math.abs(nextHead.y - snake.head.y);
+                    if (d < minD) minD = d;
+                }
+            }
+            if (minD === Infinity) minD = 0;
+            // dot product of move direction with bias vector
+            const mx = nextHead.x - myHead.x;
+            const myv = nextHead.y - myHead.y;
+            const dot = mx * vx + myv * vy;
+            return { dist: minD, dot };
+        }
+
+        let bestScore = -Infinity;
+        let bestCandidates = [];
+        for (const m of safestMoves) {
+            const s = threatScore(m.nextHead);
+            // weight distance higher, use dot to prefer moves aligned with bias
+            const score = s.dist * 10 + s.dot;
+            if (score > bestScore) {
+                bestScore = score;
+                bestCandidates = [m];
+            } else if (score === bestScore) {
+                bestCandidates.push(m);
+            }
+        }
+        const chosenMove = bestCandidates[Math.floor(Math.random() * bestCandidates.length)];
         logGameState(
             "SafeTrapFree",
             chosenMove.move,
-            { to: `(${chosenMove.nextHead.x},${chosenMove.nextHead.y})` },
+            { to: `(${chosenMove.nextHead.x},${chosenMove.nextHead.y})`, threatDist: bestScore },
         );
         return chosenMove.move;
     }
@@ -1172,6 +1354,25 @@ function minimaxAlphaBeta(
     let bestValue = maximizing ? -Infinity : Infinity;
     for (const move of moves) {
         const nextHead = getNextHeadMinimax(myHead, move);
+        // Avoid moves that lead to immediate head-on or adjacent confrontations
+        // with snakes that are equal or larger in length.
+        let skipDueToHeadOn = false;
+        for (const snake of board.snakes) {
+            if (snake.id === you.id) continue;
+            const dist = Math.abs(nextHead.x - snake.head.x) + Math.abs(nextHead.y - snake.head.y);
+            // Moving into another snake's current head square is deadly unless we are longer
+            if (nextHead.x === snake.head.x && nextHead.y === snake.head.y && you.length <= snake.length) {
+                skipDueToHeadOn = true;
+                break;
+            }
+            // Moving to a square adjacent to an equal-or-longer snake head allows them
+            // to move into us and win head-to-head — avoid those moves.
+            if (dist === 1 && snake.length >= you.length) {
+                skipDueToHeadOn = true;
+                break;
+            }
+        }
+        if (skipDueToHeadOn) continue;
         if (!isSafeMinimax(move, nextHead, board, you, myBody)) continue;
         const willEatFood = board.food &&
             board.food.some((f) => f.x === nextHead.x && f.y === nextHead.y);
